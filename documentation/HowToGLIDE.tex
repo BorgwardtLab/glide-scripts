@@ -1,0 +1,403 @@
+\documentclass{article}
+
+\usepackage{color}
+\usepackage[margin=1in]{geometry}
+\usepackage{minted}
+\usepackage{url}
+
+\definecolor{MyLightGrey}{rgb}{0.9,0.9,0.9} 
+\definecolor{MyOrange}{HTML}{D66000} 
+\newcommand{\red}[1]{{\color{MyOrange}{\textbf{#1}}}}
+% \definecolor{MyDarkRed}{rgb}{0.8,0.,0.} 
+% \newcommand{\red}[1]{{\color{MyDarkRed}{\textbf{#1}}}}
+
+\definecolor{MyBlue}{HTML}{005599} 
+\usepackage[colorlinks=true,allcolors=MyBlue]{hyperref}
+
+
+\newcommand{\glide}{\texttt{GLIDE}}
+\newcommand{\plink}{\texttt{PLINK}}
+
+\title{GLIDE (GPU-based LInear Detection of Epistasis): How To}
+\author{Chlo\'e-Agathe Azencott\\
+  \texttt{chloe-agathe.azencott@mines-paristech.fr}\\
+  %Machine Learning and Computational Biology Research Group\\
+  MLCB Research Group,
+  Max Planck Institutes T\"ubingen (Germany)\\
+  and\\
+  Mines ParisTech--CBIO, Institut Curie, INSERM U900 (France)}
+\date{January 16, 2014}
+
+\begin{document}
+\maketitle
+
+%%%
+%%% IMPORTANT NOTE
+%%% 
+%%% The 'minted' package calls Pygments
+%%% You will need to install minted
+%%% as well as Pygments
+%%% and compile with
+%%%
+%%% pdflatex -shell-escape HowToGLIDE.tex 
+%%%
+
+
+\section{Introduction}
+The goal of this document is to provide insights (and scripts) to facilitate the use of \glide~\cite{kamthong12} for epistatsis detection in GWAS data.\\
+
+\glide\ can be downloaded from \url{https://github.com/BorgwardtLab/GLIDE} and the companion scripts as well as this documentation from \url{http://github.com/chagaz/glide-scripts}.\\
+
+\red{Disclaimer:} Those are scripts I have been using in the context of a specific project, on specific machines. I have tried to keep them clean and documented, but there were not written to be very generally applicable. In particular there may be hard-coded paths and constants in them. They are provided more as examples of what can be done and how than as off-the-shelf software.\\
+
+    \glide\ computes the following linear regression: 
+    \[
+    \mbox{Pheno} = \alpha + \beta\, \mbox{SNP}_1 + \gamma\, \mbox{SNP}_2 + \delta\, \mbox{SNP}_1 \mbox{SNP}_2
+    \] and computes a t-test to evaluate whether $\delta$ is significantly different from $0$.\\
+
+     The following document illustrates how to use \glide\ for epistasis detection on a fictional data set, called \texttt{mydata\_final}, and containing 3314 samples and 464776 SNPs.
+The following assumes that the genotype data is provided as \plink\footnote{\url{http://pngu.mgh.harvard.edu/~purcell/plink/}} binary files: \\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  mydata_final.bed
+  mydata_final.bim
+  mydata_final.fam
+\end{minted}
+
+
+
+\section{Converting \plink\ files to \glide\ input}
+
+\red{Note:} This overrides the \texttt{plink2glide.py} script provided in \texttt{glide}.
+
+\subsection{\glide\ input format}
+\glide\ takes as input two genotype files (and will compute the linear regression for all pairs (SNP1, SNP2) with SNP1 belonging to the first file and SNP2 belonging to the second file), that have as many lines as SNPs and as many space-separated columns as samples, and one phenotype file, with as many lines as samples. \\
+
+Files \texttt{Test1kind\_first1ksnp.txt} and \texttt{Test1kind\_second1ksnp.txt} in the \texttt{glide} repository are examples of such input genotype files. \texttt{Test1kind\_pheno.txt} is an example of such input phenotype file.\\
+
+Here I provide one way to convert \plink\ binary files to \glide\ input files.
+
+\subsection{Step1: Converting binary \plink\ to raw \plink\ format}
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # filter out for MAF, HWE and missing genotypes
+  plink --noweb --bfile mydata_final --maf 0.01 --hwe 1e-6 --geno 0.1 --make-bed 
+  --out mydata_final_clean
+
+  # convert from binary PLINK to raw PLINK
+  plink --noweb --bfile mydata_final_clean --recodeA --out mydata_final_clean
+\end{minted}
+
+\subsection{Step2: Converting raw \plink\ files to \glide\ input files}
+In a Python console:\\
+\begin{minted}[bgcolor=MyLightGrey]{python}
+    proot = "mydata_final_clean"
+
+    # Extract phenotypes (encode binary as 0/1) 
+    with open("%s.raw" % proot) as f, open("%s.pheno" % proot, 'w') as g:
+        hdr = f.readline() 
+        for line in f:
+            # for continuous phenotype uncomment the following line:
+            # g.write("%d\n" % (float(line.split()[5])))
+            # for binary phenotype encoded as 0/1 uncomment the following line:
+            # g.write("%d\n" % (input(line.split()[5])))
+            # for binary phenotype encoded as 1/2 uncomment the following line:
+            # g.write("%d\n" % (int(line.split()[5]) - 1))
+    f.close()
+    g.close()
+\end{minted}
+
+\glide\ input genotypes (referred to as \texttt{.glideIn}) are the transposed of raw \plink\ files. 
+Raw \plink\ and \texttt{glideIn} formats are both essentially CSV formats (space-separated). One can use packages like \texttt{PyTables} or \texttt{pandas} to efficiently process it (see examples in Section~\ref{sec:h5}). However I have been using a (rather) naive implementation to transpose raw \plink\ files (you may want to grab coffee or lunch).\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # Transpose genotypes 
+  python transpose.py mydata_final_clean
+\end{minted}
+
+\subsection{Missing values}
+
+\glide\ cannot deal with missing values, as it relies on matrix operations that would fail if some of the matrix entries are missing. I recommend imputing the missing values naively: replace the missing values with the most common SNP value, or in the case of binary data, most common SNP value in the same class (cases or control). Then, for interesting pairs, you can remove the individuals with missing values for either SNP, and recompute the linear regression cleanly; see Section~\ref{sec:rerun}. If the rate of missing values is low enough, this will only make a small difference. Then again, if the rate of missing values is high, you might want to reconsider analyzing this data to start with.\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # Impute missing SNP values naively (majority)
+  python naive_impute.py mydata_final_clean
+\end{minted} 
+
+\subsection{Computing single-locus associations and genomic control with \plink}
+Generally you will also be interested in single-locus associations, which you can compute with \plink. You may also want to check for inflation of the genomic control, to know whether correcting for population structure will be needed (see Section~\ref{sec:rerun}). 
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # Single locus association and genomic control inflation factor
+  plink --bfile mydata_final --linear --adjust --gc --out mydata_final_singleLocus
+\end{minted}
+
+You can use \texttt{qqplot.py} to visualize the QQ-plot between the expected and observed distributions of $p$-values.
+
+\subsection{Saving data in HDF5 format}
+\label{sec:h5}
+
+HDF5 is a file format that makes it possible to store and efficiently process large data sets such as the \glide\ input files we have just generated. This step is not required (I always provide a non-HDF5 alternative to my scripts), but some of the post-processing will be smoother with HDF5 files. 
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  python plink2h5.py mydata_final_clean mydata_final_clean.h5
+\end{minted}
+
+This script uses the \texttt{plinkio} package\footnote{\url{https://github.com/fadern/libplinkio}} to read \plink\ data and \texttt{PyTables} to write h5 data efficiently.
+
+
+\section{Running \glide\ on a GPU machine}
+
+\subsection{Compiling \glide}
+\red{This section appplies to an \texttt{sm\_20} GPU architecture.} For a different architecture, you may need different flags and block sizes.\\
+
+Make sure that the following \texttt{NVCCCFLAGS} are in use in the \texttt{Makefile}:\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  NVCCFLAGS= -arch=sm_20  --compiler-bindir=/usr/bin/gcc-4.4
+\end{minted}
+
+Set the proper \texttt{BLOCK\_SIZE} in \texttt{GLIDE.h}:\\
+
+\begin{minted}[bgcolor=MyLightGrey]{c}
+  //sm_20 
+  #define BSx 16 
+  #define BSy 16 
+  #define BSz 1 
+  //sm_20 
+
+  /*//begin: sm_13 
+  #define BSx 10 
+  #define BSy 10 
+  #define BSz 1 
+  //end: sm_13 */
+\end{minted}
+
+Compile:\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  make all
+\end{minted}
+
+\subsection{Preparing input data}
+\glide\ takes {\bf two} genotype files as input, and computes linear regression for all pairs of SNP1 belonging to the first file and SNP2 belonging to the second file. You can give it twice the full \texttt{.glideIn} as input, but in practice it works faster if you pre-chop the input file yourself and then run \glide\ sequentially on all possible pairs of the smaller files (which I try to refer to as {\em tiles}).\\
+
+You can run some timing experiments if you want to determine the best size of those tiles. Actually, one should take the time to sit down and think about how to determine optimal tile sizes rather than shooting in the dark. For the data and GPUs I worked with when creating this documentation, I found that 24576 SNPs was a good choice. For optimal load balancing, this number should be a multiple of BSx $\times$ BSy. \\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # Split input GLIDE file into tiles of size 24576 SNPs
+  split -l 24576 mydata_final_clean.glideInImputed mydata_final_clean.glide_
+\end{minted}
+
+\subsection{Running \glide}
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # Create the bash file containing the GLIDE commands
+  # python split_glide.py <root name of genotype files> <phenotype file> 
+  #  <number of individuals> <t-test threshold> <root of bash file>
+  python split_glide.py mydata_final_clean mydata_final_clean.pheno 3314 6 runGlideMyData
+\end{minted}
+
+The GPU to use, identified by its number (see the output of \texttt{lsgpu}), is specified by the \texttt{-g} flag (also see \texttt{GPULIST} in \texttt{split\_glide.py}), and the bash script generated by \texttt{split\_glide.py} takes the name \texttt{<root of bash file>\_<gpu number>.sh}. If the GPU is not free, \glide\ will segfault:\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  *****************
+  Linear Regression
+  ***************** 
+  GPU Number 0 in use 
+  Reading in Matrices into Host Success 
+  Copying matrices to GPU success 
+  Segmentation fault
+\end{minted}
+
+\red{Always start by testing a single command}, the output of \\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  head -1 <root of bash file>_<gpu number>.sh
+\end{minted}
+
+The output produced is \texttt{<root name of genotype
+  files>\_<tile1>\_<tile2>.output}. Only the pairs with a $t$-score
+larger than \texttt{<t-test threshold>} are written out to the
+output. If no $t$-score was larger than \texttt{<t-test threshold>},
+this file will be empty. The fewer pairs to write out, the faster the
+code, so this does not necessarily mean you have a problem (other
+tiles might give you significant pairs). On the other hand, if your
+threshold is too large, you'll only get empty files and won't be able
+to relax things a bit (nor to convince yourself everything ran
+fine).\\
+
+For testing a single command, I recommand setting \texttt{<t-test threshold>} to a low value (e.g. 3.5) so as to get an output. You can then check that
+everything is in order by recomputing on CPU the $p$-values for the top 10
+pairs of the output (\texttt{mydata\_final\_clean\_af\_af.output} for our example):\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # convert t-scores into p-values and recover SNPs IDs from block indices    
+  python compute_pvalues.py mydata_final_clean_af_af.output af_af
+  mydata_final_clean.bim 3314 mydata_final_clean_af_af.pvals
+
+  # get the first 10 p-values
+  head mydata_final_clean_af_af.pvals > mydata_final_clean_af_af.pvals.10
+
+  # recompute p-values on CPU
+  py rerun_h5.py mydata_final_clean.h5 mydata_final_clean.bim 
+  mydata_final_clean.phenoGlide mydata_final_clean_af_af.pvals.10
+  mydata_final_clean_af_af.pvals.10.rerun
+
+  # compare outputs (visually)
+  more mydata_final_clean_af_af.pvals.10.rerun | cut -f 11,15
+\end{minted}
+
+Tip: there are a few hardcoded block/chunk sizes values in
+\texttt{CONST.py} and \texttt{compute\_pvalues.py}, make sure they are
+set properly (also: see Section~\ref{sec:postprocessing}).\\ 
+
+When you are satisfied with the result, go ahead and run the full script. You might want to time the first command and count how many of them you have to get an estimate of the total runtime.\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  chmod +x runGlideMyData_0.sh
+  ./runGlideMyData_0.sh
+\end{minted}
+
+
+
+
+\section{Post-processing}
+\label{sec:postprocessing}
+\subsection{Computing $p$-values}
+Here's how to transform the $t$-scores in $p$-values, retrieve SNP IDs from their tile/grid/block coordinates, and gather everything in a single file.\\
+
+\red {\texttt{blockToIndex} in \texttt{CONST.py} must have been computed using for TILESIZE the tile size used when splitting the input file of \glide}, which must then be set accordingly in \texttt{compute\_block\_to\_index.py}.\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # Compute blockToIndex dictionary in CONST.py
+  python compute_block_to_index.py 
+\end{minted}
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # Compute all p values
+  # TILESIZE = 24576
+  python compute_all_pvalues.py mydata_final_clean mydata_final_clean.bim 3314
+\end{minted}
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # cat and sort the p values files 
+  tail -n +2 mydata_final_clean_*.pvals | sort -k 7 -s -g > mydata_final_clean.spvals
+
+  # clean
+  # remove lines starting with "==>" 
+  # (! sed -i takes an additional option on MacOS)
+  sed -i '/^==>/ d' mydata_final_clean.spvals
+  # remove blank lines
+  # (! sed -i takes an additional option on MacOS)
+  sed -i '/^$/d' mydata_final_clean.spvals
+  # add header
+  echo `head -1 mydata_final_clean_aa_aa.pvals` | 
+    cat - mydata_final_clean.spvals > mydata_final_clean_0
+  mv mydata_final_clean_0 mydata_final_clean.spvals
+\end{minted}
+
+
+
+\subsection{Keeping significant pairs of SNPs}
+The multiple-hypothesis testing correction for epistasis suggested by~\cite{becker11} is $n \times (n-1)/8$ where $n$ is the number of SNPs. \\
+
+In a Python console:\\
+\begin{minted}[bgcolor=MyLightGrey]{python}
+    n = 464776
+    corr = n * (n-1) / 8 
+    sig = 0.05 / corr
+
+    pairs = set([]) # some pairs computed twice, keep track to keep only one copy
+    with open("mydata_final_clean.spvals") as f, 
+      open("mydata_final_clean.spvals.sig", 'w') as g:
+        for line in f: 
+          pval = float(line.split()[10]) 
+          if pval < sig:
+            pair = [line.split()[0], line.split()[3]]
+            pair.sort()
+            pair = "_".join(pair)
+            if not pair in pairs:
+                g.write(line)
+                pairs.add(pair)
+        else:
+            break
+    f.close()
+    g.close()
+\end{minted}
+
+
+\subsection{Re-running linear regression without imputation}
+\label{sec:rerun}
+This is how to run the same linear regression as \glide, but removing the individual with missing values (on a pair-by-pair basis, ie. two different groups of individuals might be used for two different pairs) instead of using imputed missing values.\\ 
+
+There's one (slower) version that directly reads \texttt{glideIn} files:\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  python rerun.py mydata_final_clean.glideIn mydata_final_clean.snpNames \
+    mydata_final_clean.pheno mydata_final_clean.spvals.sig \
+    mydata_final_clean.spvals.rerun
+\end{minted}
+
+and its counterpart that uses HDF5 files (see Section~\ref{sec:h5}) to create them.\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  python rerun_h5.py mydata_final_clean.h5 mydata_final_clean.bim \
+    mydata_final_clean.phenoGlide mydata_final_clean.spvals.sig \
+    mydata_final_clean.spvals.rerun
+\end{minted}
+
+You can also use these scripts to run a \textit{logistic regression}
+(using \texttt{test\_logistic} instead of \texttt{test\_linear}) if the phenotype is binary.
+
+\subsection{Re-running linear regression with covariates}
+Use \texttt{rerun\_confounders.py} or (more efficient) \texttt{rerun\_confounders\_h5.py} to include confounders in the regression model.\\
+
+To include sex as a confounder (particularly relevant if your hits are on chromosome X):\\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  # get sex information 
+  cut -d " " -f 5 mydata_final.fam > mydata_final.sex
+    
+  # run again, with sex as additional explanatory variable 
+  python rerun_confounder.py mydata_final_clean.glideIn mydata_final_clean.snpNames \
+    mydata_final.sex mydata_final_clean.pheno mydata_final_clean.spvals.sig \
+    mydata_final_clean.spvals.rerun_sex
+   
+  # h5 version
+  python rerun_confounder_h5.py mydata_final_clean.h5 mydata_final_clean.bim \
+    mydata_final.sex mydata_final_clean.phenoGlide mydata_final_clean.spvals.sig \
+    mydata_final_clean.spvals.rerun_sex
+\end{minted}
+
+To compute principal components to use as covariates, you can use \texttt{GCTA}\footnote{\url{http://www.complextraitgenomics.com/software/gcta/index.html}}: \\
+
+\begin{minted}[bgcolor=MyLightGrey]{sh}
+  ~/gcta/gcta64 --bfile mydata_final_clean --make-grm --out mydata_final_clean 
+  --thread-num 1 --autosome
+  ~/gcta/gcta64 --grm Dmydata_final_clean --pca 20 --out mydata_final_clean
+\end{minted}
+
+\subsection{Meta-analysis}
+If your study comprises several populations (cohorts), you probably
+want to run separate analyses on each population, then combine the
+results into one meta-study (to avoid population stratification). \texttt{meta\_analysis.py} is an example of how to run
+such a meta-analysis, using the inverse-variance based approach of METAL~\cite{willer10}.
+
+\begin{thebibliography}{2}
+        \bibitem{kamthong12} T.~Kam-Thong, C.-A.~Azencott, L. Cayton,
+    B. Pütz, A. Altmann, N. Karbalai, P. G. Sämann, B. Schölkopf,
+    B. Müller-Myhsok, K. M. Borgwardt K.M.  \newblock GLIDE: GPU-Based
+    Linear Regression for the Detection of Epistasis \newblock {\it
+      Human Heredity}, 73:220--235, 2012.
+
+        \bibitem{becker11} T.~Becker, C.~Herold, C.~Meesters,
+    M.~Mattheisen, M.~P.~Baur.  \newblock Significance levels in
+    genome- wide interaction analysis (GWIA).  \newblock {\it Ann Hum
+      Genet}, 75:29–-35, 2011.
+
+    \bibitem{willer10} C.~J.~Willer, Y.~Lim, G.~R.~Abecasis. \newblock
+METAL: fast and efficient meta-analysis of genomewide association
+scans. \newblock {\it Bioinformatics}, 26(17): 2190–2191, 2010.
+\end{thebibliography}
+
+
+
+\end{document}

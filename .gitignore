@@ -1,0 +1,9 @@
+# LaTeX
+*.aux
+*.log
+*.out
+*.pdf
+
+
+# Temporary files
+*~
