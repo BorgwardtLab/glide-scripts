@@ -1,7 +1,9 @@
 # Glide companion scripts & tutorial
 
 ## Summary 
-These Python scripts are provided for basic tasks around the usage of the GLIDE package for the detection of epistasis in GWAS data. For usage, please refer to `documentation/HowToGLIDE.pdf` (which also contains useful command line instructions).
+These Python scripts are provided for basic tasks around the usage of the [GLIDE package](https://github.com/BorgwardtLab/GLIDE) for the detection of epistasis in GWAS data. 
+
+> T. Kam-Thong, C.-A. Azencott, L. Cayton, B. Puetz, A. Altmann, N. Karbalai, P. G. Saemann, B. Schoelkopf, B. Mueller-Myhsok, and K. M. Borgwardt. (2012) **GLIDE: GPU-Based Linear Regression for Detection of Epistasis**. _Human Heredity_, 73 (4), 220-236 [doi: 10.1159/000341885](http://www.karger.com/Article/FullText/341885)
 
 They were mostly developed at the MLCB (Machine Learning for Computational Biology) research group of the Max Planck Institutes in Tuebingen (Germany). Thanks to Damian Roqueiro for stress-testing them and providing useful feedback!
 
